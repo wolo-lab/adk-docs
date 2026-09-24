@@ -8,7 +8,7 @@ catalog_tags: ["data", "mcp"]
 # Couchbase MCP tool for ADK
 
 <div class="language-support-tag">
-  <span class="lst-supported">Supported in ADK</span><span class="lst-python">Python</span><span class="lst-typescript">TypeScript</span>
+  <span class="lst-supported">Supported in ADK</span><span class="lst-python">Python</span><span class="lst-typescript">TypeScript</span><span class="lst-go">Go</span>
 </div>
 
 The [Couchbase MCP Server](https://github.com/Couchbase-Ecosystem/mcp-server-couchbase)
@@ -112,6 +112,91 @@ issues.
         });
 
         export { rootAgent };
+        ```
+
+=== "Go"
+
+    === "Local MCP Server"
+
+        ```go
+        package main
+
+        import (
+        	"context"
+        	"log"
+        	"os"
+        	"os/exec"
+
+        	"github.com/modelcontextprotocol/go-sdk/mcp"
+        	"google.golang.org/genai"
+
+        	"google.golang.org/adk/v2/agent"
+        	"google.golang.org/adk/v2/agent/llmagent"
+        	"google.golang.org/adk/v2/cmd/launcher"
+        	"google.golang.org/adk/v2/cmd/launcher/full"
+        	"google.golang.org/adk/v2/model/gemini"
+        	"google.golang.org/adk/v2/tool"
+        	"google.golang.org/adk/v2/tool/mcptoolset"
+        )
+
+        const (
+        	cbConnectionString = "couchbase://localhost"
+        	cbUsername         = "Administrator"
+        	cbPassword         = "password"
+        )
+
+        func main() {
+        	ctx := context.Background()
+
+        	model, err := gemini.NewModel(ctx, "gemini-flash-latest", &genai.ClientConfig{
+        		APIKey: os.Getenv("GOOGLE_API_KEY"),
+        	})
+        	if err != nil {
+        		log.Fatalf("Failed to create the model: %v", err)
+        	}
+
+        	server := exec.CommandContext(ctx, "uvx", "couchbase-mcp-server")
+        	// Forward only what uvx needs, plus the Couchbase credentials. The parent
+        	// environment may hold unrelated secrets, such as the GOOGLE_API_KEY above.
+        	server.Env = []string{
+        		"CB_CONNECTION_STRING=" + cbConnectionString,
+        		"CB_USERNAME=" + cbUsername,
+        		"CB_PASSWORD=" + cbPassword,
+        		"CB_MCP_READ_ONLY_MODE=true", // Prevents write operations
+        	}
+        	for _, k := range []string{
+        		"PATH", "HOME", // POSIX
+        		"XDG_CACHE_HOME", "XDG_DATA_HOME", "UV_CACHE_DIR", // uv cache and tool dirs
+        		"APPDATA", "LOCALAPPDATA", "TEMP", "USERPROFILE", // Windows
+        	} {
+        		if v, ok := os.LookupEnv(k); ok {
+        			server.Env = append(server.Env, k+"="+v)
+        		}
+        	}
+
+        	couchbase, err := mcptoolset.New(mcptoolset.Config{
+        		Transport: &mcp.CommandTransport{Command: server},
+        	})
+        	if err != nil {
+        		log.Fatalf("Failed to create the Couchbase tool set: %v", err)
+        	}
+
+        	rootAgent, err := llmagent.New(llmagent.Config{
+        		Model:       model,
+        		Name:        "couchbase_agent",
+        		Instruction: "Help users explore and query Couchbase databases",
+        		Toolsets:    []tool.Toolset{couchbase},
+        	})
+        	if err != nil {
+        		log.Fatalf("Failed to create the agent: %v", err)
+        	}
+
+        	l := full.NewLauncher()
+        	cfg := &launcher.Config{AgentLoader: agent.NewSingleLoader(rootAgent)}
+        	if err := l.Execute(ctx, cfg, os.Args[1:]); err != nil {
+        		log.Fatalf("Run failed: %v\n\n%s", err, l.CommandLineSyntax())
+        	}
+        }
         ```
 
 ## Available tools
